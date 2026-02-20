@@ -5,22 +5,25 @@ import arsenic.event.bus.Listener;
 import arsenic.event.bus.annotations.EventLink;
 import arsenic.event.impl.EventRenderWorldLast;
 import arsenic.event.impl.EventSilentRotation;
-import arsenic.event.impl.EventTick;
 import arsenic.injection.accessor.IMixinRenderManager;
 import arsenic.module.Module;
 import arsenic.module.ModuleCategory;
 import arsenic.module.ModuleInfo;
 import arsenic.module.impl.client.TargetManager;
+import arsenic.module.property.impl.BooleanProperty;
 import arsenic.module.property.impl.EnumProperty;
 import arsenic.module.property.impl.doubleproperty.DoubleProperty;
 import arsenic.module.property.impl.doubleproperty.DoubleValue;
 import arsenic.utils.render.RenderUtils;
 import arsenic.utils.rotations.RotationUtils;
 import net.minecraft.client.renderer.GlStateManager;
-import net.minecraft.client.renderer.RenderGlobal;
 import net.minecraft.entity.EntityLivingBase;
+import net.minecraft.item.ItemAxe;
+import net.minecraft.item.ItemStack;
+import net.minecraft.item.ItemSword;
 import net.minecraft.util.AxisAlignedBB;
 import net.minecraft.util.MathHelper;
+import net.minecraft.util.MovingObjectPosition; // Thêm import này
 import org.lwjgl.opengl.GL11;
 
 import java.awt.*;
@@ -32,14 +35,23 @@ public class AimAssist extends Module {
 
     public final DoubleProperty speed = new DoubleProperty("Speed", new DoubleValue(1, 50, 10, 1));
     public final EnumProperty<aMode> mode = new EnumProperty<>("Mode:", aMode.Silent);
+    public final BooleanProperty weaponOnly = new BooleanProperty("Weapon Only", true);
+    // 1. Thêm option Break Block
+    public final BooleanProperty breakBlock = new BooleanProperty("Break Block Check", true);
+    
     private float prevPartialTicks, yawDelta, pitchDelta;
     private EntityLivingBase target;
 
     @RequiresPlayer
     @EventLink
     public final Listener<EventSilentRotation> eventTickListener = event -> {
-        if (!mc.gameSettings.keyBindAttack.isKeyDown()) {
+        // 2. Kiểm tra phím bấm, vũ khí và trạng thái phá block
+        if (!mc.gameSettings.keyBindAttack.isKeyDown() 
+            || (weaponOnly.getValue() && !isHoldingWeapon())
+            || (breakBlock.getValue() && isBreakingBlock())) {
+            
             setNullRots();
+            target = null;
             return;
         }
 
@@ -48,6 +60,7 @@ public class AimAssist extends Module {
             setNullRots();
             return;
         }
+        
         float[] rotationsToTarget = RotationUtils.getRotationsToEntity(target);
         if(mode.getValue() == aMode.Silent) {
             event.setSpeed((float) speed.getValue().getInput());
@@ -60,21 +73,31 @@ public class AimAssist extends Module {
         prevPartialTicks = 0;
     };
 
+    // 3. Hàm kiểm tra xem có đang nhìn vào block để đào không
+    private boolean isBreakingBlock() {
+        return mc.objectMouseOver != null && mc.objectMouseOver.typeOfHit == MovingObjectPosition.MovingObjectType.BLOCK;
+    }
+
+    private boolean isHoldingWeapon() {
+        if (mc.thePlayer == null) return false;
+        ItemStack heldItem = mc.thePlayer.getHeldItem();
+        return heldItem != null && (heldItem.getItem() instanceof ItemSword || heldItem.getItem() instanceof ItemAxe);
+    }
+
+    // ... (Phần còn lại: eventGameLoopListener, getYawDelta, drawTargetShader... giữ nguyên như cũ)
+    
     @RequiresPlayer
     @EventLink
     public final Listener<EventRenderWorldLast> eventGameLoopListener = event -> {
-        if(target != null)
+        if(target != null && (!weaponOnly.getValue() || isHoldingWeapon()) && (!breakBlock.getValue() || !isBreakingBlock()))
             drawTargetShader(event);
+            
         if(mode.getValue() == aMode.Silent || (yawDelta == 0 && pitchDelta == 0))
             return;
 
         float partialTicksElapsed = event.partialTicks - prevPartialTicks;
-
-        // Add the delta to the current rotations
         float newYaw = mc.thePlayer.rotationYaw + (yawDelta * partialTicksElapsed);
         float newPitch = mc.thePlayer.rotationPitch + (pitchDelta * partialTicksElapsed);
-
-        // Clamp pitch to valid range [-90, 90]
         newPitch = MathHelper.clamp_float(newPitch, -90.0f, 90.0f);
 
         float[] rotations = RotationUtils.patchGCD(
@@ -84,8 +107,6 @@ public class AimAssist extends Module {
 
         mc.thePlayer.rotationYaw = rotations[0];
         mc.thePlayer.rotationPitch = rotations[1];
-
-        // Store the current partialTicks for next frame calculation
         prevPartialTicks = event.partialTicks;
     };
 
@@ -134,5 +155,4 @@ public class AimAssist extends Module {
         GL11.glLineWidth(1.0F);
         GlStateManager.popMatrix();
     }
-
 }
